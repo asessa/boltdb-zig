@@ -65,9 +65,9 @@ pub const TX = struct {
         _db.getMeta().copy(self.meta);
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self, null);
-        self.root._b.? = self.meta.root;
-        assert(self.root._b.?.root == _db.getMeta().root.root, "root is invalid", .{});
-        assert(self.root._b.?.sequence == _db.getMeta().root.sequence, "sequence is invalid", .{});
+        self.root._b.? = self.meta.root();
+        assert(self.root._b.?.root == _db.getMeta().root_root, "root is invalid", .{});
+        assert(self.root._b.?.sequence == _db.getMeta().root_sequence, "sequence is invalid", .{});
         // Note: here the root node is not set
         self.root.rootNode = null;
         self.autoFreeNodes = AutoFreeObject.init(_db.allocator);
@@ -114,8 +114,8 @@ pub const TX = struct {
             .{ "Root.Bucket.sequence", self.root._b.?.sequence },
             .{ "Root.Bucket.nodes", nodesKeys.items },
             .{ "Tx.Page is null", self.root.page == null },
-            .{ "meta.Root.Root", self.meta.root.root },
-            .{ "meta.Root.Sequence", self.meta.root.sequence },
+            .{ "meta.Root.Root", self.meta.root_root },
+            .{ "meta.Root.Sequence", self.meta.root_sequence },
             .{ "meta.Version", self.meta.version },
             .{ "meta.Page Size", self.meta.pageSize },
             .{ "meta.Flags", self.meta.flags },
@@ -279,7 +279,8 @@ pub const TX = struct {
         self.stats.spill_time += startTime.lap();
 
         // Free the old root bucket.
-        self.meta.root.root = self.root._b.?.root;
+        self.meta.root_root = self.root._b.?.root;
+        self.meta.root_sequence = self.root._b.?.sequence;
         const opgid = self.meta.pgid;
 
         // Free the freelist and allocate new pages for it. This will overestimate
@@ -556,9 +557,10 @@ pub const TX = struct {
 
     // Writes the meta to the disk.
     fn writeMeta(self: *Self) Error!void {
-        // Create a tempory buffer for the meta page.
+        // Create a tempory buffer for the meta page (aligned so p.meta() is valid for *db.Meta).
         const _db = self.getDB();
-        const buf = self.allocator.alloc(u8, _db.pageSize) catch unreachable;
+        // Page data (meta) starts at offset 16; use 16-byte alignment so p.meta() is valid for *Meta.
+        const buf = self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", _db.pageSize) catch unreachable;
         @memset(buf, 0);
         defer self.allocator.free(buf);
         const p = _db.pageInBuffer(buf, 0);

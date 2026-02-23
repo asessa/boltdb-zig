@@ -5,7 +5,16 @@ pub fn main() !void {
     std.testing.log_level = .debug;
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
-    var database = try db.Database.open(allocator, "boltdb.tmp", null, db.defaultOptions);
+    const db_path = blk: {
+        var args = std.process.args();
+        _ = args.skip();
+        if (args.next()) |p| break :blk p;
+        break :blk "boltdb.tmp";
+    };
+    var database = db.Database.open(allocator, db_path, null, db.defaultOptions) catch |err| {
+        std.log.err("open failed: {}", .{err});
+        return err;
+    };
     defer database.close() catch unreachable;
     // create a bucket
     try struct {

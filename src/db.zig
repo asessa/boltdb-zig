@@ -27,6 +27,18 @@ const defaultOptions = consts.defaultOptions;
 
 const log = std.log.scoped(.BoltDB);
 
+/// FNV-1a 64-bit hash (same as Go hash/fnv). Used for meta checksum (bbolt compatibility).
+fn fnv1a64(data: []const u8) u64 {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    var h: u64 = FNV_OFFSET;
+    for (data) |b| {
+        h ^= @as(u64, b);
+        h *%= FNV_PRIME;
+    }
+    return h;
+}
+
 /// DB is the main struct that holds the database state.
 pub const DB = struct {
     pageSize: usize,
@@ -150,7 +162,7 @@ pub const DB = struct {
         writer.print("meta0:{}\n", .{self.pageById(0).*}) catch unreachable;
         writer.print("meta1:{}\n", .{self.pageById(1).*}) catch unreachable;
         const m = self.getMeta();
-        writer.print("rootBucket:{}\n", .{self.pageById(m.root.root).*}) catch unreachable;
+        writer.print("rootBucket:{}\n", .{self.pageById(m.root_root).*}) catch unreachable;
         writer.print("freelist:{}\n", .{self.pageById(m.freelist).*}) catch unreachable;
         return buf.toOwnedSlice() catch unreachable;
     }
@@ -296,7 +308,8 @@ pub const DB = struct {
             m.version = consts.Version;
             m.pageSize = @truncate(self.pageSize);
             m.freelist = 2;
-            m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
+            m.root_root = 3; // So the top root bucket is a leaf
+        m.root_sequence = 0;
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
             m.flags = consts.intFromFlags(PageFlag.meta);
@@ -729,7 +742,7 @@ pub const DB = struct {
         const trx = try self.begin(false);
         const trxID = trx.getID();
         if (@import("builtin").is_test) {
-            log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+            log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root_root, trx.meta.root_sequence, trx.root._b.? });
             defer log.info("End a read-only transaction, txid: {}", .{trxID});
         }
 
@@ -907,13 +920,15 @@ pub const Info = packed struct {
 };
 
 /// Represents the meta data of the database.
-pub const Meta = struct {
+/// Packed so layout matches on-disk (no padding); compatible with bbolt/Go.
+pub const Meta = packed struct {
     magic: u32 = 0,
     version: u32 = 0,
     pageSize: u32 = 0,
     flags: u32 = 0,
-    // the root bucket
-    root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
+    // the root bucket (on-disk: two u64s)
+    root_root: PgidType = 0,
+    root_sequence: u64 = 0,
     // the freelist page id
     freelist: consts.PgidType = 0,
     // the max page id
@@ -924,6 +939,14 @@ pub const Meta = struct {
     check_sum: u64 = 0,
 
     const Self = @This();
+
+    pub fn root(self: *const Self) bucket._Bucket {
+        return .{ .root = self.root_root, .sequence = self.root_sequence };
+    }
+    pub fn setRoot(self: *Self, b: bucket._Bucket) void {
+        self.root_root = b.root;
+        self.root_sequence = b.sequence;
+    }
     // The size of the meta object.
     pub const header_size = @sizeOf(Meta);
 
@@ -939,14 +962,13 @@ pub const Meta = struct {
         return;
     }
 
-    /// Calculates the checksum of the meta object
+    /// Calculates the checksum of the meta object (FNV-1a 64-bit, same as bbolt/Go).
     pub fn sum64(self: *const Self) u64 {
         const endPos = @offsetOf(Self, "check_sum");
         const ptr = @intFromPtr(self);
         const buf: [*]u8 = @ptrFromInt(ptr);
         const sumBytes = buf[0..][0..endPos];
-        const crc32 = std.hash.Crc32.hash(sumBytes);
-        return @as(u64, crc32);
+        return fnv1a64(sumBytes);
     }
 
     /// Copies one meta object to another
@@ -956,7 +978,7 @@ pub const Meta = struct {
 
     /// Writes the meta onto a page.
     pub fn write(self: *Self, p: *page.Page) void {
-        assert(self.root.root < self.pgid, "root page id is invalid, self's pgid: {}", .{self.pgid});
+        assert(self.root_root < self.pgid, "root page id is invalid, self's pgid: {}", .{self.pgid});
         assert(self.freelist < self.pgid, "freelist page id is invalid, self's pgid: {}", .{self.pgid});
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
         p.id = @as(PgidType, self.txid & 0b1);
@@ -982,8 +1004,8 @@ pub const Meta = struct {
         try table.addRow(.{ "Version", self.version });
         try table.addRow(.{ "Page Size", self.pageSize });
         try table.addRow(.{ "Flags", self.flags });
-        try table.addRow(.{ "Root", self.root.root });
-        try table.addRow(.{ "Sequence", self.root.sequence });
+        try table.addRow(.{ "Root", self.root_root });
+        try table.addRow(.{ "Sequence", self.root_sequence });
         try table.addRow(.{ "Freelist", self.freelist });
         try table.addRow(.{ "Pgid", self.pgid });
         try table.addRow(.{ "Txid", self.txid });
