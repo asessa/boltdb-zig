@@ -434,7 +434,7 @@ test "page struct" {
         }
         const leafElements = pageRef.leafPageElements();
         for (leafElements.?) |leaf| {
-            std.debug.print("{?}\n", .{leaf});
+            std.debug.print("leaf: flags={} pos={} kSize={} vSize={}\n", .{ leaf.flags, leaf.pos, leaf.kSize, leaf.vSize });
         }
     }
 }
