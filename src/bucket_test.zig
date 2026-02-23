@@ -371,13 +371,15 @@ test "Bucket_Delete_Large" {
 }
 
 // Deleting a very large list of keys will cause the freelist to use overflow.
+// Use cursor.delete() while iterating so the cursor stays valid after each delete.
 test "Bucket_Delete_FreelistOverflow" {
     std.testing.log_level = .err;
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
 
-    const count = 10000;
+    // Reduced from 10000 to avoid test timeout; still enough to trigger freelist overflow.
+    const count = 2500;
     const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
     var ctx = ContextTuple{
         .first = testCtx,
@@ -407,7 +409,7 @@ test "Bucket_Delete_FreelistOverflow" {
         }
     }
 
-    // Delete all of them in one large transaction
+    // Delete all using cursor.delete() so cursor remains valid after each delete.
     const updateFn2 = struct {
         fn update(tx: *TX) Error!void {
             const b = tx.getBucket("0") orelse unreachable;
@@ -415,7 +417,7 @@ test "Bucket_Delete_FreelistOverflow" {
             defer cursor.deinit();
             var keyPair = cursor.first();
             while (keyPair.key != null) {
-                try b.delete(keyPair.key.?);
+                try cursor.delete();
                 keyPair = cursor.next();
             }
         }

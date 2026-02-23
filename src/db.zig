@@ -279,8 +279,9 @@ pub const DB = struct {
     pub fn init(self: *Self) !void {
         log.info("init a new db!", .{});
         // Set the page size to the OS page size.
-        // Create two meta pages on a buffer, and
-        const buf = try self.allocator.alloc(u8, self.pageSize * 4);
+        // Create two meta pages on a buffer. Allocate with alignment so that
+        // page data (ptr + Page.headerSize()) is aligned for db.Meta.
+        const buf = try self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", self.pageSize * 4);
         defer self.allocator.free(buf);
         for (0..2) |i| {
             const p = self.pageInBuffer(buf, @as(PgidType, i));
@@ -373,9 +374,12 @@ pub const DB = struct {
                 return err0;
             };
         };
+        // Only print meta in tests when debugging (e.g. ZIG_DEBUG_BOLT_META=1) to keep test output clean and faster.
         if (@import("builtin").is_test) {
-            try self.meta0.print(self.allocator);
-            try self.meta1.print(self.allocator);
+            if (std.posix.getenv("ZIG_DEBUG_BOLT_META")) |_| {
+                try self.meta0.print(self.allocator);
+                try self.meta1.print(self.allocator);
+            }
         }
     }
 
@@ -974,7 +978,7 @@ pub const Meta = struct {
         var table = Table.init(allocator, 20, .Blue, "Meta");
         defer table.deinit();
         try table.addHeader(.{ "Field", "Value" });
-        try table.addRow(.{ "Megic", self.magic });
+        try table.addRow(.{ "Magic", self.magic });
         try table.addRow(.{ "Version", self.version });
         try table.addRow(.{ "Page Size", self.pageSize });
         try table.addRow(.{ "Flags", self.flags });

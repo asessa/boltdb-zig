@@ -87,7 +87,9 @@ pub const Table = struct {
 
     /// Print a table.
     pub fn print(self: @This()) !void {
-        const writer = std.io.getStdOut().writer();
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        const writer = &stdout_writer.interface;
 
         // calculate the total width of the table
         const totalWidth = self.columnWidth * self.headers.items.len + self.headers.items.len + 1;
@@ -95,9 +97,9 @@ pub const Table = struct {
         const leftPadding = if (totalWidth > nameLen) (totalWidth - nameLen) / 2 else 0;
         const rightPadding = if (totalWidth > nameLen + leftPadding) totalWidth - nameLen - leftPadding else 0;
 
-        try writer.writeByteNTimes('-', leftPadding);
+        try writeByteNTimes(writer, '-', leftPadding);
         try writer.print(" {s} ", .{self.name});
-        try writer.writeByteNTimes('-', rightPadding);
+        try writeByteNTimes(writer, '-', rightPadding);
         try writer.print("\n", .{});
 
         // print the top separator
@@ -119,12 +121,20 @@ pub const Table = struct {
 
         // print the bottom separator
         try self.printSeparator(writer);
+        try writer.flush();
+    }
+
+    fn writeByteNTimes(writer: anytype, byte: u8, n: usize) !void {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            try writer.writeByte(byte);
+        }
     }
 
     fn printSeparator(self: @This(), writer: anytype) !void {
         try writer.writeByte('+');
         for (self.headers.items) |_| {
-            try writer.writeByteNTimes('-', self.columnWidth);
+            try writeByteNTimes(writer, '-', self.columnWidth);
             try writer.writeByte('+');
         }
         try writer.print("\n", .{});
@@ -138,12 +148,12 @@ pub const Table = struct {
                 cellLen = self.columnWidth;
             }
             const padding = if (cellLen < self.columnWidth) (self.columnWidth - cellLen) / 2 else 0;
-            try writer.writeByteNTimes(' ', padding);
+            try writeByteNTimes(writer, ' ', padding);
             if (cell.len > self.columnWidth) {
                 try writer.print("{s}...", .{cell[0 .. self.columnWidth - 3]});
             } else {
                 try writer.print("{s}", .{cell});
-                try writer.writeByteNTimes(' ', self.columnWidth - cellLen - padding);
+                try writeByteNTimes(writer, ' ', self.columnWidth - cellLen - padding);
             }
             try writer.writeByte('|');
         }

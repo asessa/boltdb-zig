@@ -17,4 +17,5 @@ test {
     _ = @import("bucket_test.zig");
     _ = @import("tx_test.zig");
     _ = @import("page.zig");
+    _ = @import("memory_test.zig");
 }
